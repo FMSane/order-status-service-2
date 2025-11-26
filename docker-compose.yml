@@ -1,0 +1,27 @@
+services:
+  order-status-service-2:
+    build: .
+    image: order-status-service-2
+    container_name: order-status-service-2
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - MONGO_URI=mongodb://host.docker.internal:27017
+      - MONGO_DB_NAME=order_status_db
+      - AUTH_SERVICE_URL=http://host.docker.internal:3000
+      - RABBIT_URL=amqp://host.docker.internal
+      - ORDERS_SERVICE_URL=http://host.docker.internal:3004
+
+  # Usa el Mongo ya existente (comentamos para no recrearlo)
+  # ec-mongo:
+  #   image: mongo:6.0
+  #   container_name: ec-mongo
+  #   ports:
+  #     - "27017:27017"
+  #   volumes:
+  #     - mongo_data:/data/db
+
+volumes:
+  mongo_data:
