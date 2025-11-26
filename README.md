@@ -22,6 +22,7 @@ Forma parte del ecosistema de microservicios, y se comunica con el microservicio
 * Docker y Docker Compose instalados.
 * Microservicio de autenticación (prod-auth-go) en ejecución.
 * Microservicio de ordenes (prod-orders-go) en ejecución.
+* Rabbit en ejecución, con acceso a "place_order" por parte de Order.
 * Base de datos MongoDB accesible (puede estar en otro contenedor).
 
 
@@ -39,7 +40,6 @@ Una vez obtenido el token correspondiente según el caso de uso (admin o user), 
 ``` bash
 Authorization: Bearer <TOKEN>
 ```
-
 
 ## Modelo de Datos
 
@@ -74,81 +74,27 @@ Estado de orden
 }
 ```
 
-## API
 
-### 1. Estados base del catálogo (solo administradores)
+## Casos de Uso
+### 1. Crear estado inicial de una orden (POST /status/init)
+Este caso de uso comienza cuando un cliente externo —otro microservicio o una prueba manual— envía una solicitud `POST /status/init` para crear el estado inicial de una orden. Esta operación no requiere token, por lo que el flujo pasa directamente al `OrderController.InitStatus`.
 
-Estados válidos que pueden asignarse a las órdenes.
+Primero se valida el cuerpo del request usando `c.ShouldBindJSON(&req)`. El objeto recibido debe respetar el DTO `InitOrderStatusRequest`, que exige `orderId` y `userId`. Si algo falta, se devuelve un `400 Bad Request`.
 
-### Ver todos los estados del catálogo
-`
-GET /admin/status/catalog
-`
+Luego, el controlador llama al servicio mediante:
+ `ctl.Service.InitOrderStatus(req.OrderID, req.UserID, req.Shipping, false)`
 
-#### Headers
-|Cabecera|Contenido|
-| --- | --- |
-|`Authorization: Bearer xxx`|Token de usuario con permisos "admin" en formato JWT|
+La lógica continúa dentro de `OrderStatusService.InitOrderStatus`, donde se crea la estructura inicial `OrderStatus`. Internamente se fuerza el estado “Pendiente” sin importar lo que llegue. También se genera un único registro en el historial (`StatusRecord`) marcado como `Current: true`.
+Este método contiene una pequeña lógica: si los datos del shipping está vacío, genera una dirección por defecto. Finalmente, delega en el repositorio para persistir la orden llamando a `repo.Save`.
 
-
-#### Respuesta:
-`200`
-``` JSON
-[
-  { "name": "Pendiente" },
-  { "name": "En preparación" },
-  { "name": "Enviado" },
-  { "name": "Entregado" },
-  { "name": "Cancelado" }
-]
+#### Restricciones importantes
+- No requiere autenticación.
+- No valida si la orden ya existe: delega ese comportamiento al repositorio, donde puede ser un upsert.
+- El estado inicial siempre es Pendiente, nunca otro.
+- El historial comienza siempre con un único registro.
 
 
-`403`
-``` JSON
-{
-    "error": "admin privileges required"
-}
-```
-
-
-#### Crear nuevo estado en el catálogo
-`POST /admin/status/catalog`
-
-#### Headers
-|Cabecera|Contenido|
-| --- | --- |
-|`Authorization: Bearer xxx`|Token de usuario con permisos "admin" en formato JWT|
-|`Content-Type: application/json`|El cuerpo de la solicitud o respuesta contiene datos en formato JSON|
-
-#### Body:
-``` JSON
-{
-  "name": "string"
-}
-```
-
-#### Respuesta:
-`200`
-``` JSON
-{
-  "message": "status added to catalog"
-}
-```
-
-`403`
-``` JSON
-{
-    "error": "admin privileges required"
-}
-```
-
-### 2. Estados de órdenes reales
-
-#### (Automático) Crear un nuevo estado al realizar una orden
-Cuando el microservicio de órdenes registra una nueva orden, debe hacer un POST al siguiente endpoint para inicializar su estado en “Pendiente”:
-`
-POST /status/init
-`
+#### API `POST /status/init`
 
 #### Headers
 |Cabecera|Contenido|
@@ -158,15 +104,15 @@ POST /status/init
 #### Body:
 ``` JSON
 {
-    "order_id": "string",
-    "user_id": "string",
-    "shipping": {
-        "address_line1": "string",
-        "city": "string",
-        "province": "string",
-        "country": "string",
-        "postal_code": "number",
-        "comments": "string"
+  "orderId": "string",
+  "userId": "string",
+  "shipping": {
+    "addressLine1": "string",
+    "city": "string",
+    "postalCode": "string",
+    "province": "string",
+    "country": "string",
+    "comments": "string"
     }
 }
 ```
@@ -175,29 +121,104 @@ POST /status/init
 `201`
 ``` JSON
 {
-    "id": "string",
-    "order_id": "string",
-    "user_id": "string",
-    "status_id": "string",
+    "orderId": "string",
+    "userId": "string",
     "status": "Pendiente",
+    "history": [
+        {
+            "status": "Pendiente",
+            "reason": "Orden inicializada",
+            "userId": "string",
+            "timestamp": "string",
+            "current": true
+        }
+    ],
     "shipping": {
-        "address_line1": "string",
+        "addressLine1": "string",
         "city": "string",
+        "postalCode": "string",
         "province": "string",
         "country": "string",
-        "postal_code": "number",
         "comments": "string"
     },
-    "created_at": "0001-01-01T00:00:00Z",
-    "updated_at": "2025-11-17T22:01:43.2253701Z"
+    "createdAt": "string",
+    "updatedAt": "string"
 }
 ```
 
 `403`
 Si el formato no es válido.
 
-#### Cambiar el estado de una orden (solo admin)
-`PUT /status/:object_status_order_id`
+
+### 2. Inicialización mediante RabbitMQ (evento place_order)
+Este caso se activa de forma asíncrona cuando llega el evento `order_placed` al exchange fanout.
+El archivo `/rabbit/setup.go` crea la cola propia, la bindea y registra un consumidor. Cada mensaje recibido es entregado a `PlaceOrderConsumer.Handle`.
+
+#### Dentro de Handle:
+- Se registra el mensaje crudo en logs.
+- Se deserializa usando `json.Unmarshal` en un `PlacedOrderMessage`.
+- Se construye un `InitOrderStatusRequest`.
+- Se llama a:
+`Service.InitOrderStatus(orderId, userId, shipping, true)`
+
+La lógica ejecutada es la misma que el caso anterior.
+
+#### Restricciones importantes
+- No hay validación de token (los consumidores no usan middleware).
+- Si el mensaje es inválido o incompleto, se loguea el error y el mensaje continúa.
+- El estado inicial sigue siendo siempre Pendiente.
+- El shipping se fuerza a datos de ejemplo si llega vacío.
+
+
+
+### 3. Actualizar estado de una orden
+Este flujo inicia cuando se realiza un `PATCH hacia /status/{orderId}/status`. Esta operación requiere token, por lo cual pasa primero por `AuthMiddleware`.
+
+El middleware extrae el token del header, llama a `AuthService.ValidateToken`, guarda en el contexto `userID`, `userPermissions` y nombre del usuario.
+
+Una vez dentro del controlador, `UpdateStatus` obtiene el orderId desde la URL, valida el body usando `UpdateStatusRequest` (requiere `status`), recupera datos del contexto como: `actorID`, permisos del usuario, y determina si es administrador usando `slices.Contains`.
+
+Luego llama al servicio:
+
+`Service.UpdateStatus(ctx, orderId, newStatus, reason, actorID, isAdmin)`
+
+#### Lógica central en el servicio
+Dentro de `UpdateStatus` ocurren las validaciones más importantes del sistema:
+- Buscar la orden. Si no existe → error.
+- Verificar estado actual (`current`).
+- Si el nuevo estado es igual al actual → no hace nada.
+- Si el estado actual es final (Cancelado, Rechazado, Entregado) → bloquea con `ErrFinalState`.
+- Validar que el nuevo estado existe (`isValidState`).
+- Decidir reglas según rol (`admin` o `user`).
+
+#### Reglas para admin
+- No puede poner Cancelado.
+- No puede poner Rechazado si la orden ya está en Cancelado, Enviado o Entregado.
+- Debe respetar el mapa `adminTransitions`, por ejemplo:
+-- Pendiente → En Preparación o Rechazado
+-- En Preparación → Enviado o Rechazado
+-- Enviado → Entregado
+- Si la transición es válida:
+-- → crea un nuevo StatusRecord y lo manda a repo.UpdateStatus.
+
+#### Reglas para usuario
+- Solo puede operar sobre órdenes donde `ord.UserID` == `actorID`; si no: `ErrForbidden`.
+- Puede cancelar mientras la orden no esté en Enviado, Entregado o Rechazado.
+- Debe respetar `userTransitions`, como:
+-- Pendiente → Cancelado
+-- En Preparación → Cancelado
+
+#### Restricciones importantes
+- Requiere token válido.
+- Los usuarios no pueden cambiar estados de órdenes ajenas (la pertenencia de las órdenes se valida mediante el token).
+- Los administradores no pueden cancelar ni rechazar en estados prohibidos.
+- Nadie puede modificar una orden ya finalizada.
+- Un estado inválido devuelve `ErrInvalidTransition`.
+- Control estricto de transiciones: no se puede saltar estados arbitrariamente.
+
+
+#### API
+`PATCH /status/:orderId/status`
 
 #### Headers
 |Cabecera|Contenido|
@@ -208,7 +229,8 @@ Si el formato no es válido.
 #### Body:
 ``` JSON
 {
-  "status_id": "string"
+  "status": "string",
+  "reason": "string"
 }
 ```
 
@@ -216,58 +238,42 @@ Si el formato no es válido.
 `201`
 ``` JSON
 {
-    "id": "string",
-    "order_id": "string",
-    "user_id": "string",
-    "status_id": "string",
-    "status": "string",
-    "shipping": {
-        "address_line1": "string",
-        "city": "string",
-        "country": "string"
-    },
-    "created_at": "0001-01-01T00:00:00Z",
-    "updated_at": "2025-11-17T22:09:32.012Z"
+    "message": "status updated"
 }
 ```
 
-`500`
+`400`
 ``` JSON
 {
-    "error": "only admin or seller can reject the order"
+    "error": "forbidden"
 }
 ```
+En caso de usuario sin permisos, transición errónea, acción no permitida para ese tipo de usuario.
 
-`500`
+`400`
 ``` JSON
 {
-    "error": "only client can cancel the order"
+    "error": "cannot change final state"
 }
 ```
+En caso de que la orden se encuentre en un estado final de envío, como Cancelado, Entregado o Rechazado.
 
-`500`
-``` JSON
-{
-    "error": "cannot change status from terminal state 'Entregado'"
-}
-```
 
-`500`
-``` JSON
-{
-    "error": "cannot change status from terminal state 'Cancelado'"
-}
-```
+### 4. Ver los estados de las órdenes del usuario actual autenticado
+Este caso comienza después de pasar por `AuthMiddleware`, que asegura que el usuario esté logueado y deposita `userID` en el contexto (mediante la utilización del token de autenticación, y la conexión con el microservicio Auth).
 
-`500`
-``` JSON
-{
-    "error": "cannot change status from terminal state 'Rechazado'"
-}
-```
+El controlador `GetMyOrders` toma ese valor y llama a:
+`Service.GetByUserID(ctx, userID)`
 
-#### Ver los estados de las órdenes del usuario actual autenticado
-`GET /status`
+El servicio delega en el repositorio con `FindByUserID`, que devuelve todas las órdenes asociadas a ese usuario.
+
+#### Restricciones importantes
+-Requiere token.
+- Solo devuelve órdenes cuyo `userId` coincide con el del token.
+
+
+### API
+`GET /orders/mine`
 
 #### Headers
 |Cabecera|Contenido|
@@ -279,19 +285,29 @@ Si el formato no es válido.
 ``` JSON
 [
     {
-        "id": "string",
-        "order_id": "string",
-        "user_id": "string",
-        "status_id": "string",
+        "orderId": "string",
+        "userId": "string",
         "status": "string",
+        "history": [
+            {
+                "status": "string",
+                "reason": "string",
+                "userId": "string",
+                "timestamp": "string",
+                "current": false/true
+            },
+        ],
         "shipping": {
-            "address_line1": "string",
+            "addressLine1": "string",
             "city": "string",
-            "country": "string"
+            "postalCode": "string",
+            "province": "string",
+            "country": "string",
+            "comments": "string"
         },
-        "created_at": "0001-01-01T00:00:00Z",
-        "updated_at": "2025-11-15T03:23:59.148Z"
-    }
+        "createdAt": "string",
+        "updatedAt": "string"
+    },
 ]
 ```
 
@@ -302,8 +318,20 @@ Si el formato no es válido.
 }
 ```
 
-#### Obtener el listado de todas las órdenes y sus estados (sólo admin)
-`GET status/all`
+### 5. Obtener el listado de todas las órdenes y sus estados (sólo admin)
+Aquí se utiliza el middleware `AdminOnly`. Antes de llegar al controlador, el middleware revisa `userPermissions`; si el usuario no tiene permisos "admin", devuelve `403 Forbidden`.
+Una vez autorizado, el controlador llama a:
+`Service.GetAll(ctx)`
+
+El servicio delega en `repo.FindAll`, obteniendo todos los documentos.
+
+#### Restricciones importantes
+- Solo administradores pueden acceder.
+- No hay filtros adicionales.
+
+
+#### API
+`GET /admin/orders/all`
 
 #### Headers
 |Cabecera|Contenido|
@@ -315,32 +343,54 @@ Si el formato no es válido.
 ``` JSON
 [
     {
-        "id": "string",
-        "order_id": "string",
-        "user_id": "string",
-        "status_id": "string",
+        "orderId": "string",
+        "userId": "string",
         "status": "string",
+        "history": [
+            {
+                "status": "string",
+                "reason": "string",
+                "userId": "string",
+                "timestamp": "string",
+                "current": false/true
+            },
+        ],
         "shipping": {
-            "address_line1": "string",
+            "addressLine1": "string",
             "city": "string",
-            "country": "string"
+            "postalCode": "string",
+            "province": "string",
+            "country": "string",
+            "comments": "string"
         },
-        "created_at": "0001-01-01T00:00:00Z",
-        "updated_at": "2025-11-15T03:23:59.148Z"
-    }
+        "createdAt": "string",
+        "updatedAt": "string"
+    },
 ]
 ```
 
 `403`
 ``` JSON
 {
-    "error": "forbidden: admin access required"
+    "error": "admin privileges required"
 }
 ```
 
 
-#### Obtener ordenes por estado
-`GET /status/filter?status_id=:status_id`
+#### 6. Obtener órdenes por estado
+El flujo es equivalente al anterior, también protegido por `AdminOnly`.
+El controlador toma el parámetro `state`, y llama a:
+`Service.GetByStatus(ctx, state)`
+
+Devuelve todas las órdenes cuyo estado actual coincide exactamente con el estado solicitado.
+
+#### Restricciones importantes
+- Solo accesible por administradores.
+- No se valida que el estado sea uno de los definidos; un estado inexistente simplemente devolverá lista vacía.
+
+
+#### API
+`GET /admin/orders/:state`
 
 #### Headers
 |Cabecera|Contenido|
@@ -352,25 +402,147 @@ Si el formato no es válido.
 ``` JSON
 [
     {
-        "id": "string",
-        "order_id": "string",
-        "user_id": "string",
-        "status_id": "string",
+        "orderId": "string",
+        "userId": "string",
         "status": "string",
+        "history": [
+            {
+                "status": "string",
+                "reason": "string",
+                "userId": "string",
+                "timestamp": "string",
+                "current": false/true
+            },
+        ],
         "shipping": {
-            "address_line1": "string",
+            "addressLine1": "string",
             "city": "string",
-            "country": "string"
+            "postalCode": "string",
+            "province": "string",
+            "country": "string",
+            "comments": "string"
         },
-        "created_at": "0001-01-01T00:00:00Z",
-        "updated_at": "2025-11-15T03:23:59.148Z"
-    }
+        "createdAt": "string",
+        "updatedAt": "string"
+    },
 ]
 ```
 
 `403`
 ``` JSON
 {
-    "error": "forbidden: admin access required"
+    "error": "admin privileges required"
+}
+```
+
+
+### 7. Obtener el último estado de una orden
+
+El usuario pasa por `AuthMiddleware`. El controlador recupera `userID` y permisos.
+Primero se busca la orden:
+`o, err := Service.GetByOrderID(...)`
+Si no existe → 404.
+
+Luego ocurre la validación clave:
+```
+if !isAdmin && o.UserID != actorID {
+    return 403
+}
+```
+
+Es decir:
+- Los administradores siempre pueden ver cualquier orden.
+- Un usuario común solo puede ver órdenes propias.
+- El controlador luego recorre `o.History` para buscar el registro donde `Current == true`, que representa el estado actual.
+
+#### Restricciones importantes
+- Usuario debe estar autenticado.
+- No se puede consultar información de órdenes ajenas.
+- Requiere que la orden tenga un registro marcado como Current (si no, error interno).
+- Admin tiene acceso total.
+
+
+#### API
+`GET /orders/:orderId/latest`
+
+#### Headers
+|Cabecera|Contenido|
+| --- | --- |
+|`Authorization: Bearer xxx`|Token de usuario con permiso "admin", o ser el usuario propietario de esa orden, en formato JWT|
+
+
+#### Respuesta:
+`200`
+``` JSON
+{
+    "status": "string",
+    "reason": "string",
+    "userId": "string",
+    "timestamp": "string",
+    "current": true
+}
+```
+
+`403`
+``` JSON
+{
+    "error": "you cannot view another user's order"
+}
+```
+En caso de que se intente ver detalles de una orden que no pertenece al usuario autenticado, y que además ese usuario no es "admin".
+
+`403`
+``` JSON
+{
+    "error": "missing authorization header"
+}
+
+```
+En caso de que el usuario no esté autenticado de ninguna forma.
+
+
+### 8. Obtener todas las órdenes junto a su último estado
+El controlador invoca `Service.GetAll()`, itera cada orden y dentro de cada historial busca el registro Current.
+Construye una estructura compacta: `orderId`, `userId`, `status`, `shipping`.
+
+Este endpoint no aplica reglas del negocio: simplemente resume información.
+
+#### Restricciones importantes
+- Sólo un usuarios con permisos admin puede acceder a los datos.
+- Solo lectura.
+
+#### API
+`GET /admin/orders-with-status`
+
+#### Headers
+|Cabecera|Contenido|
+| --- | --- |
+|`Authorization: Bearer xxx`|Token de usuario con permiso "admin" en formato JWT|
+
+
+#### Respuesta:
+`200`
+``` JSON
+[
+  {
+        "orderId": "string",
+        "shipping": {
+            "addressLine1": "string",
+            "city": "string",
+            "postalCode": "string",
+            "province": "string",
+            "country": "string",
+            "comments": "string"
+        },
+        "status": "string",
+        "userId": "string"
+    },
+]
+```
+
+`403`
+``` JSON
+{
+    "error": "admin privileges required"
 }
 ```
