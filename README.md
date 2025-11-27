@@ -43,37 +43,46 @@ Authorization: Bearer <TOKEN>
 
 ## Modelo de Datos
 
-### Catálogo de estados
+### OrderStatus
+Representa una orden completa con su estado actual, historial y datos de envío.
 
 ``` JSON
-{
-  "id": string,
-  "name": string,
-  "created_at": string
+OrderStatus {
+    "orderId": string,
+    "userId": string,
+    "status": string,            // estado actual (ej: "Pendiente", "En Preparación", ...)
+    "history": StatusRecord[],   // historial completo de cambios de estado
+    "shipping": Shipping,        // dirección de entrega
+    "createdAt": string (ISO timestamp),
+    "updatedAt": string (ISO timestamp)
 }
 ```
 
-Estado de orden
+### Shipping
+Datos asociados al envío de la orden.
 
 ``` JSON
-{
-    "id": string,
-    "order_id": string,
-    "user_id": string,
-    "status_id": string,
-    "status": string,
-    "shipping": {
-        "address_line1": string,
-        "city": string,
-        "province": string,
-        "country": string,
-        "comments": string
-    },
-    "created_at": string,
-    "updated_at": string
+Shipping {
+    "addressLine1": string,
+    "city": string,
+    "postalCode": string,
+    "province": string,
+    "country": string,
+    "comments": string
 }
 ```
 
+### StatusRecord
+Cada entrada representa un cambio de estado en la orden.
+``` JSON
+StatusRecord {
+    "status": string,             // estado asignado
+    "reason": string,             // motivo opcional del cambio
+    "userId": string,             // usuario que realizó el cambio
+    "timestamp": string (ISO timestamp),
+    "current": boolean            // true = este es el último estado
+}
+```
 
 ## Casos de Uso
 ### 1. Crear estado inicial de una orden (POST /status/init)
