@@ -14,7 +14,7 @@ func SetupConsumers(ch *amqp091.Channel, svc *service.OrderStatusService) {
 
 	// 1. Declarar la queue
 	q, err := ch.QueueDeclare(
-		"order_status_service_orders", // cola exclusiva para tu micro
+		"order_status_service_orders", // cola exclusiva para el micro
 		true,
 		false,
 		false,
