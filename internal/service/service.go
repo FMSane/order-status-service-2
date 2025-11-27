@@ -32,9 +32,10 @@ func dtoToModelShipping(in dto.ShippingDTO) model.Shipping {
 
 // Errores de negocio exportados (los usa el controller)
 var (
-	ErrForbidden         = errors.New("forbidden")
-	ErrInvalidTransition = errors.New("invalid state transition")
-	ErrFinalState        = errors.New("cannot change final state")
+	ErrForbidden          = errors.New("forbidden")
+	ErrInvalidTransition  = errors.New("invalid state transition")
+	ErrFinalState         = errors.New("cannot change final state")
+	ErrOrderAlreadyExists = errors.New("la orden ya fue inicializada previamente")
 )
 
 type OrderStatusService struct {
@@ -89,7 +90,7 @@ func (s *OrderStatusService) InitOrderStatus(ctx context.Context, orderId string
 
 	// 2. Si NO hay error (significa que ya existe), no hacemos nada
 	if err == nil && existing != nil {
-		return existing, nil // Ya estaba creada, la ignoramos para no resetearla
+		return nil, ErrOrderAlreadyExists
 	}
 
 	// 3. Si da error ErrNotFound, entonces sí la creamos desde cero
