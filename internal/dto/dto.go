@@ -3,14 +3,14 @@ package dto
 
 import "time"
 
-// CreateOrderStatusRequest used by API + Rabbit consumer to create initial status
+// CreateOrderStatusRequest usado por la API y Rabbit para inicializar una orden
 type InitOrderStatusRequest struct {
 	OrderID  string      `json:"orderId" binding:"required"`
 	UserID   string      `json:"userId" binding:"required"`
 	Shipping ShippingDTO `json:"shipping"`
 }
 
-// ShippingDTO constant structure for addresses
+// ShippingDTO para la dirección y comentario
 type ShippingDTO struct {
 	AddressLine1 string `json:"addressLine1"`
 	City         string `json:"city"`
@@ -25,7 +25,6 @@ type UpdateStatusRequest struct {
 	Reason string `json:"reason"`
 }
 
-// Response DTOs
 type OrderStatusResponse struct {
 	OrderID   string      `json:"orderId"`
 	UserID    string      `json:"userId"`

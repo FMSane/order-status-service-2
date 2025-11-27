@@ -3,7 +3,6 @@ package model
 
 import "time"
 
-// OrderStatus is the document we store per order. Note: we store only current state by name.
 type OrderStatus struct {
 	OrderID   string         `bson:"order_id" json:"orderId"`
 	UserID    string         `bson:"user_id" json:"userId"`

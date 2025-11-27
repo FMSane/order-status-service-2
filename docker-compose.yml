@@ -14,14 +14,5 @@ services:
       - RABBIT_URL=amqp://host.docker.internal
       - ORDERS_SERVICE_URL=http://host.docker.internal:3004
 
-  # Usa el Mongo ya existente (comentamos para no recrearlo)
-  # ec-mongo:
-  #   image: mongo:6.0
-  #   container_name: ec-mongo
-  #   ports:
-  #     - "27017:27017"
-  #   volumes:
-  #     - mongo_data:/data/db
-
 volumes:
   mongo_data:
