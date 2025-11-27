@@ -2,6 +2,7 @@
 package rabbit
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 
@@ -62,7 +63,7 @@ func (c *PlaceOrderConsumer) Handle(msg []byte) error {
 		},
 	}
 
-	_, err := c.Service.InitOrderStatus(event.Message.OrderID, event.Message.UserID, req.Shipping, true)
+	_, err := c.Service.InitOrderStatus(context.Background(), event.Message.OrderID, event.Message.UserID, req.Shipping, true)
 	if err != nil {
 		log.Println("❌ Error creando estado inicial:", err)
 		return err

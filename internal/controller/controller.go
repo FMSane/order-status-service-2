@@ -28,6 +28,7 @@ func (ctl *OrderController) InitStatus(c *gin.Context) {
 	}
 
 	res, err := ctl.Service.InitOrderStatus(
+		c.Request.Context(),
 		req.OrderID,
 		req.UserID,
 		req.Shipping,

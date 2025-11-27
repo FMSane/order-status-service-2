@@ -36,7 +36,7 @@ func main() {
 	orderService := service.NewOrderStatusService(repo)
 	authService := service.NewAuthService()
 
-	// Handlers
+	// Controller
 	ctrl := controller.NewOrderController(orderService)
 
 	// Router

@@ -52,6 +52,7 @@ func (a *AuthService) ValidateToken(token string) (*AuthUser, error) {
 
 	req.Header.Set("Authorization", "Bearer "+token)
 
+	// Hace una petición HTTP al microservicio Auth (a la ruta /users/current)
 	resp, err := a.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("auth request failed: %w", err)

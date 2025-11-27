@@ -82,7 +82,17 @@ var finalStates = map[string]bool{
 // IMPORTANTE: fuerza el estado a "Pendiente" (siempre).
 // Se puede invocar desde el consumer Rabbit (primario) o vía API para pruebas.
 // Si el shipping del request está vacío, se usa la dirección constante.
-func (s *OrderStatusService) InitOrderStatus(orderId string, userId string, shipping dto.ShippingDTO, fromRabbit bool) (*model.OrderStatus, error) {
+func (s *OrderStatusService) InitOrderStatus(ctx context.Context, orderId string, userId string, shipping dto.ShippingDTO, fromRabbit bool) (*model.OrderStatus, error) {
+
+	// 1. Primero preguntamos si ya existe
+	existing, err := s.repo.FindByOrderID(ctx, orderId)
+
+	// 2. Si NO hay error (significa que ya existe), no hacemos nada
+	if err == nil && existing != nil {
+		return existing, nil // Ya estaba creada, la ignoramos para no resetearla
+	}
+
+	// 3. Si da error ErrNotFound, entonces sí la creamos desde cero
 
 	// Shipping por defecto si viene vacío
 	if shipping.AddressLine1 == "" {
