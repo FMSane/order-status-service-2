@@ -12,6 +12,12 @@ Forma parte del ecosistema de microservicios, y se comunica con el microservicio
   * Cambiar el estado de cualquier orden, excepto al estado "Cancelado".
   * Ver los estados e historial de todas las órdenes, junto a los datos de envío.
   * Puede "Rechazar" una orden, si es que esta no está en estado "Cancelado", "Enviado" ni "Entregado".
+* Transiciones entre estados
+  * Pendiente → En Preparación → Enviado → Entregado. (camino feliz)
+  * Pendiente → Cancelado. (usuario propietario de la orden)
+  * Pendiente → En Preparación → Cancelado. (usuario propietario de la orden)
+  * Pendiente → Rechazado. (sólo admin)
+  * Pendiente → En Preparación → Rechazado. (sólo admin)
 
 * Otras consideraciones
   * Al establecer el estado de una orden, el sistema comprobará que ese estado no sea el actual de la orden, para así proceder a actualizarlo.
