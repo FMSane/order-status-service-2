@@ -33,8 +33,8 @@ func dtoToModelShipping(in dto.ShippingDTO) model.Shipping {
 // Errores de negocio exportados (los usa el controller)
 var (
 	ErrForbidden          = errors.New("forbidden")
-	ErrInvalidTransition  = errors.New("invalid state transition")
-	ErrFinalState         = errors.New("cannot change final state")
+	ErrInvalidTransition  = errors.New("transición de estado inválida")
+	ErrFinalState         = errors.New("no se puede cambiar el estado de una orden en estado final")
 	ErrOrderAlreadyExists = errors.New("la orden ya fue inicializada previamente")
 )
 
@@ -145,8 +145,7 @@ func (s *OrderStatusService) GetByUserID(ctx context.Context, userID string) ([]
 	return s.repo.FindByUserID(ctx, userID)
 }
 
-// UpdateStatus valida y realiza la transición según rol (isAdmin).
-// actorID es el id de quien realiza la acción (provisto por el middleware).
+// UpdateStatus valida y realiza la transición entre estados según las reglas de negocio.
 func (s *OrderStatusService) UpdateStatus(ctx context.Context, orderID string, newStatus string, reason string, actorID string, isAdmin bool) error {
 	ord, err := s.repo.FindByOrderID(ctx, orderID)
 	if err != nil {
@@ -155,82 +154,52 @@ func (s *OrderStatusService) UpdateStatus(ctx context.Context, orderID string, n
 
 	current := ord.Status
 
-	// Si es el mismo estado -> no hacer nada
+	// Si el estado nuevo es el mismo que ya está, no hacemos nada
 	if current == newStatus {
 		return nil
 	}
-
-	// Si actual ya es final -> bloquear
+	// Si el estado actual es final, no se puede cambiar
 	if finalStates[current] {
 		return ErrFinalState
 	}
-
-	// Validar que el nuevo estado exista
+	// Si el nuevo estado no es válido, error
 	if !isValidState(newStatus) {
 		return ErrInvalidTransition
 	}
 
-	// Reglas ADMIN
-	if isAdmin {
-		// Admin no puede establecer Cancelado
-		if newStatus == "Cancelado" {
+	// Determinamos si el actor es el dueño de la orden
+	isOwner := ord.UserID == actorID
+
+	// Puede realizar la transición si es admin?
+	allowedAsAdmin := isAdmin && contains(adminTransitions[current], newStatus)
+
+	// Puede realizar la transición si es dueño?
+	allowedAsOwner := isOwner && contains(userTransitions[current], newStatus)
+
+	// Tiene permiso para hacer cualquier cambio?
+	if !isAdmin && !isOwner {
+		return ErrForbidden // Ni es admin, ni es el dueño -> Fuera.
+	}
+
+	if !allowedAsAdmin && !allowedAsOwner {
+		// Caso especial: Si es admin, pero no es el dueño, no puede cancelar
+		if isAdmin && newStatus == "Cancelado" && !isOwner {
 			return ErrForbidden
 		}
-		// Rechazar no permitido si current está en Cancelado, Enviado, Entregado
-		if newStatus == "Rechazado" {
-			if current == "Cancelado" || current == "Enviado" || current == "Entregado" {
-				return ErrInvalidTransition
-			}
-		}
-		allowed := adminTransitions[current]
-		if contains(allowed, newStatus) {
-			record := model.StatusRecord{
-				Status:    newStatus,
-				Reason:    reason,
-				UserID:    actorID,
-				Timestamp: time.Now(),
-				Current:   true,
-			}
-			return s.repo.UpdateStatus(ctx, orderID, newStatus, record)
 
-		}
 		return ErrInvalidTransition
 	}
 
-	// Reglas USER
-	// User solo puede actuar sobre sus propias órdenes
-	if ord.UserID != actorID {
-		return ErrForbidden
+	// Actualización del estado
+	record := model.StatusRecord{
+		Status:    newStatus,
+		Reason:    reason,
+		UserID:    actorID,
+		Timestamp: time.Now(),
+		Current:   true,
 	}
 
-	// User puede cancelar solo si current no es Enviado/Entregado/Rechazado
-	if newStatus == "Cancelado" {
-		if current == "Enviado" || current == "Entregado" || current == "Rechazado" {
-			return ErrInvalidTransition
-		}
-		record := model.StatusRecord{
-			Status:    newStatus,
-			Reason:    reason,
-			UserID:    actorID,
-			Timestamp: time.Now(),
-			Current:   true,
-		}
-		return s.repo.UpdateStatus(ctx, orderID, newStatus, record)
-
-	}
-	allowed := userTransitions[current]
-	if contains(allowed, newStatus) {
-		record := model.StatusRecord{
-			Status:    newStatus,
-			Reason:    reason,
-			UserID:    actorID,
-			Timestamp: time.Now(),
-			Current:   true,
-		}
-		return s.repo.UpdateStatus(ctx, orderID, newStatus, record)
-
-	}
-	return ErrInvalidTransition
+	return s.repo.UpdateStatus(ctx, orderID, newStatus, record)
 }
 
 func contains(arr []string, s string) bool {
