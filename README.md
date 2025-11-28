@@ -97,9 +97,9 @@ Este caso de uso comienza cuando un cliente externo —otro microservicio o una 
 Primero se valida el cuerpo del request usando `c.ShouldBindJSON(&req)`. El objeto recibido debe respetar el DTO `InitOrderStatusRequest`, que exige `orderId` y `userId`. Si algo falta, se devuelve un `400 Bad Request`.
 
 Luego, el controlador llama al servicio mediante:
- `ctl.Service.InitOrderStatus(req.OrderID, req.UserID, req.Shipping, false)`
+ `ctl.Service.InitOrderStatus(c.Request.Context(), req.OrderID, req.UserID, req.Shipping, false)`
 
-La lógica continúa dentro de `OrderStatusService.InitOrderStatus`, donde se crea la estructura inicial `OrderStatus`. Internamente se fuerza el estado “Pendiente” sin importar lo que llegue. También se genera un único registro en el historial (`StatusRecord`) marcado como `Current: true`.
+La lógica continúa dentro de `OrderStatusService.InitOrderStatus`, donde se crea la estructura inicial `OrderStatus`. Si ya existe una orden con un `orderId` igual al recibido por el servicio, no se creará ni modificará nada. Internamente se fuerza el estado “Pendiente” sin importar lo que llegue. También se genera un único registro en el historial (`StatusRecord`) marcado como `Current: true`.
 Este método contiene una pequeña lógica: si los datos del shipping está vacío, genera una dirección por defecto. Finalmente, delega en el repositorio para persistir la orden llamando a `repo.Save`.
 
 #### Restricciones importantes
@@ -174,7 +174,7 @@ El archivo `/rabbit/setup.go` crea la cola propia, la bindea y registra un consu
 - Se deserializa usando `json.Unmarshal` en un `PlacedOrderMessage`.
 - Se construye un `InitOrderStatusRequest`.
 - Se llama a:
-`Service.InitOrderStatus(orderId, userId, shipping, true)`
+`Service.InitOrderStatus(context.Background(), event.Message.OrderID, event.Message.UserID, event.Message.Shipping, true)`
 
 La lógica ejecutada es la misma que el caso anterior.
 
@@ -182,7 +182,7 @@ La lógica ejecutada es la misma que el caso anterior.
 - No hay validación de token (los consumidores no usan middleware).
 - Si el mensaje es inválido o incompleto, se loguea el error y el mensaje continúa.
 - El estado inicial sigue siendo siempre Pendiente.
-- El shipping se fuerza a datos de ejemplo si llega vacío.
+- El shipping se fuerza a datos predefinidos en el Service si llega vacío.
 
 
 
