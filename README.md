@@ -174,7 +174,7 @@ El archivo `/rabbit/setup.go` crea la cola propia, la bindea y registra un consu
 - Se deserializa usando `json.Unmarshal` en un `PlacedOrderMessage`.
 - Se construye un `InitOrderStatusRequest`.
 - Se llama a:
-`Service.InitOrderStatus(orderId, userId, shipping, true)`
+`Service.InitOrderStatus(context.Background(), event.Message.OrderID, event.Message.UserID, event.Message.Shipping, true)`
 
 La lógica ejecutada es la misma que el caso anterior.
 
@@ -182,7 +182,7 @@ La lógica ejecutada es la misma que el caso anterior.
 - No hay validación de token (los consumidores no usan middleware).
 - Si el mensaje es inválido o incompleto, se loguea el error y el mensaje continúa.
 - El estado inicial sigue siendo siempre Pendiente.
-- El shipping se fuerza a datos de ejemplo si llega vacío.
+- El shipping se fuerza a datos predefinidos en el Service si llega vacío.
 
 
 
